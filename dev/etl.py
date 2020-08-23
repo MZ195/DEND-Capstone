@@ -9,7 +9,7 @@ import datetime
 import os
 
 
-def setup_spark():
+def create_spark_session():
     spark = SparkSession.builder.config(
         "spark.jars.packages", "saurfang:spark-sas7bdat:2.0.0-s_2.11").enableHiveSupport().getOrCreate()
     sqlContext = SQLContext(spark)
@@ -17,20 +17,30 @@ def setup_spark():
     return spark
 
 
-def process_immigration_df(path, spark, us_code_state, city_code):
+def process_immigration_df(path, spark, us_code_state, city_code, immigration_code):
+    """
+    Process immigration data and create a table for that
+
+    Keyword arguments:
+    path              -- Current file path
+    spark             -- Spark session object
+    us_code_state     -- Tuples of Code: state pairs
+    city_code.        -- Tuples of Code: city pairs
+    immigration_code  -- Tuples of Code: race pairs
+    """
     months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
               'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-    fileName = path + '/data/18-83510-I94-Data-2016/i94_{}16_sub.sas7bdat'
+    fileName = '../../data/18-83510-I94-Data-2016/i94_{}16_sub.sas7bdat'
 
     code_state_udf = udf(lambda state: us_code_state[state], StringType())
     city_code_udf = udf(lambda code: city_code[code], StringType())
     country_code_udf = udf(lambda code: immigration_code[code], StringType())
 
     for month in months:
-        fileName = fileName.format(month)
-        print(fileName)
+        current_month_filename = fileName.format(month)
+        print(current_month_filename)
         immigration_df = spark.read.format(
-            'com.github.saurfang.sas.spark').load(fileName)
+            'com.github.saurfang.sas.spark').load(current_month_filename)
 
         immigrationMonthDF = immigration_df.filter(immigration_df.i94addr.isNotNull())\
             .filter(immigration_df.i94res.isNotNull())\
@@ -47,12 +57,19 @@ def process_immigration_df(path, spark, us_code_state, city_code):
             .withColumn("city", city_code_udf(f.col("i94port")))
 
         immigrationMonthDF.select('id', 'year', 'month', 'origin_country', 'city_code',
-                                  'city', 'state_code', 'State').write.mode('append').parquet(path + '/result_data/immigration_data')
+                                  'city', 'state_code', 'State').write.mode('append').parquet(path + '/immigration_data')
 
 
 def process_demographics_df(path, us_code_state):
+    """
+    Process demographics data and create a table for that
+
+    Keyword arguments:
+    path              -- Current file path
+    us_code_state     -- Tuples of Code: state pairs
+    """
     demographics_df = pd.read_csv(
-        path + "/src_data/us-cities-demographics.csv", sep=";")
+        path + "/us-cities-demographics.csv", sep=";")
 
     demographics_df.loc[demographics_df["Race"] ==
                         "American Indian and Alaska Native", "Race"] = "Native"
@@ -73,7 +90,6 @@ def process_demographics_df(path, us_code_state):
     us_demographics_df["median_age"] = us_demographics_df["Median Age"]
 
     for state_code in us_code_state:
-        print(state_code)
         df = us_demographics_df.loc[us_demographics_df['state_code'] == state_code]
         total_population = df['Total Population'].max()
         male_population = df['Male Population'].max()
@@ -111,30 +127,17 @@ def process_demographics_df(path, us_code_state):
     us_df_demographics = pd.DataFrame(us_df_demographics.to_records())
 
     us_df_demographics.to_csv(
-        path + "/result_data/us_demographics.csv", index=False)
-
-
-def process_temperature_df(path):
-    temperature_df = pd.read_csv(
-        path + "/src_data/GlobalLandTemperaturesByState.csv")
-
-    temperature_df['dt'] = pd.to_datetime(temperature_df['dt'])
-    temperature_df['year'] = temperature_df['dt'].dt.year
-    temperature_df['month'] = temperature_df['dt'].dt.month
-
-    us_temperature_df = temperature_df[(
-        temperature_df['Country'] == "United States") & (temperature_df['year'] > 1900)]
-    us_temperature_df['state_code'] = us_temperature_df.apply(
-        lambda row: us_state_code[row["State"]], axis=1)
-    us_temperature_df = us_temperature_df[[
-        'dt', 'AverageTemperature', 'State', 'Country', 'year', 'month', 'state_code']]
-
-    us_temperature_df.to_csv(
-        path + "/result_data/us_temperature.csv", index=False)
+        path + "/us_demographics.csv", index=False)
 
 
 def process_airport_df(path):
-    airport_df = pd.read_csv(path + "/src_data/airport-codes_csv.csv")
+    """
+    Process airport data and create a table for that
+
+    Keyword arguments:
+    path              -- Current file path
+    """
+    airport_df = pd.read_csv(path + "/airport-codes_csv.csv")
 
     us_airport_df = airport_df[airport_df["iso_country"] == "US"]
     us_airport_df = us_airport_df[(us_airport_df["type"] == "small_airport") | (
@@ -154,20 +157,23 @@ def process_airport_df(path):
     us_airport_df = us_airport_df[["ident", "type", "name", "elevation_ft", "country",
                                    "state_code", "city_code", "municipality", "x_coordinate", "y_coordinate"]]
 
-    us_airport_df.to_csv(path + "\\result_data\\us_airports.csv", index=False)
+    us_airport_df.to_csv(path + "/us_airports.csv", index=False)
 
 
-if __name__ == "__main__":
-
+def run():
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    utils_data = json.load(open(dir_path + '/src_data/utils.json'))
+    utils_data = json.load(open(dir_path + '/utils.json'))
     us_state_code = utils_data['us_state_code']
     us_code_state = {state: code for code, state in us_state_code.items()}
     city_code = utils_data['city_codes']
     immigration_code = utils_data['immigration_codes']
 
-    spark = setup_spark()
+    spark = create_spark_session()
     process_airport_df(dir_path)
-    process_temperature_df(dir_path)
     process_demographics_df(dir_path, us_code_state)
-    process_immigration_df(dir_path, spark, us_code_state, city_code)
+    process_immigration_df(dir_path, spark, us_code_state,
+                           city_code, immigration_code)
+
+
+if __name__ == "__main__":
+    run()
