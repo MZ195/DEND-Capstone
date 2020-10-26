@@ -13,7 +13,7 @@ airports<br>
 And a single fact table.<br>
 We use Spark for ETL jobs and store the results in parquet for downstream analysis.
 
-## The project follows the follow steps:<br>
+## The project follows below steps:<br>
 Step 1: Scope the Project and Gather Data<br>
 Step 2: Explore and Assess the Data<br>
 Step 3: Define the Data Model<br>
